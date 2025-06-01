@@ -28,7 +28,6 @@ if __name__ == "__main__":
     max_iterations=5
     distance_ratio_threshold=0.5
 
-#    inliers_result = set()
     while max_iterations:
         max_iterations -= 1
         # Add 3 random indexes
@@ -37,7 +36,6 @@ if __name__ == "__main__":
         while len(inliers) < 3:
             random_index = random.randint(0, len(point_cloud.X)-1)
             inliers.append(random_index)
-        # print(inliers)
         try:
             # In case of *.xyz data
             x1, y1, z1, _, _, _ = point_cloud.loc[inliers[0]]
@@ -74,24 +72,6 @@ if __name__ == "__main__":
             # Add the point as inlier, if within the threshold distancec ratio
             if distance <= distance_ratio_threshold:
                 inliers.append(index)
-        # Update the set for retaining the maximum number of inlier points
-#        if len(inliers) > len(inliers_result):
-#            inliers_result.clear()
-#            inliers_result = inliers
-
-
-    # Segregate inliers and outliers from the point cloud
-#     inlier = pd.DataFrame(columns=("X", "Y", "Z"))
-#     outlier = pd.DataFrame(columns=("X", "Y", "Z"))
-# #######################################
-# # pandas 2.0 no more append, but concat
-# #######################################
-#     for point in point_cloud.iterrows():
-#         print(point[0])
-#         if point[0] in inliers_result:
-#             inlier = pd.concat([inlier,pd.DataFrame([point[1]["X"],point[1]["Y"],point[1]["Z"]])]   , ignore_index=True)
-#             continue
-#         outlier = pd.concat([outlier,pd.DataFrame([point[1]["X"],point[1]["Y"],point[1]["Z"]])], ignore_index=True)
 
 ## %matplotlib qt
 
@@ -104,7 +84,6 @@ if __name__ == "__main__":
 
 
     fig = plt.figure()
-#    ax = fig.gca(projection='3d')
     ax = Axes3D(fig)
         
     ax.scatter(in_[:,0] , in_[:,1],  in_[:,2],  c="green")
