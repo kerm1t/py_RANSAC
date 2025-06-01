@@ -19,14 +19,14 @@ import open3d as o3d
 
 
 if __name__ == "__main__":
-    pcd = o3d.io.read_point_cloud(r"d:\\out.pcd")
+    pcd = o3d.io.read_point_cloud(r".\\data\\ground.pcd")
 
     np_points = np.asarray(pcd.points)
 
     point_cloud = pd.DataFrame({'X': np_points[:,0], 'Y': np_points[:,1], 'Z': np_points[:,2]})
     
     max_iterations=5
-    distance_ratio_threshold=1.0
+    distance_ratio_threshold=0.5
 
 #    inliers_result = set()
     while max_iterations:
