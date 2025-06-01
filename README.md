@@ -1,4 +1,4 @@
-# 3D RANSAC implementation in python
+# 3D Ransac (python, open3d, pandas, numpy)
 
 The result is more random the smaller the ```max_iterations```
 
