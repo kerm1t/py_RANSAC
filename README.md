@@ -1,6 +1,6 @@
 # 3D Ransac (python, open3d, pandas, numpy)
 
-The result is more random the smaller the ```max_iterations```
+The result is random. The smaller ```max_iterations``` the more likely the algo will run into a local minimum.
 
 ![alt text](https://github.com/kerm1t/py_RANSAC/blob/master/img/pyRANSAC_0.5m_thresh.png)
 
