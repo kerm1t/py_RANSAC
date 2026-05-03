@@ -19,7 +19,7 @@ import open3d as o3d
 
 
 if __name__ == "__main__":
-    pcd = o3d.io.read_point_cloud(r".\\data\\ground.pcd")
+    pcd = o3d.io.read_point_cloud(r"F:\VGGT_out\pcloud_ply\stockholm.ply")
 
     np_points = np.asarray(pcd.points)
 
