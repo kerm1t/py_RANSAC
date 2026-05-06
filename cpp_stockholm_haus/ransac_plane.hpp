@@ -591,10 +591,18 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
         p[2] += shift[2];
     }
 
-    // Update d for every plane:  d_new = d_old - dot(n, -shift) = d_old + dot(n, shift)
-    // (plane eq: dot(n,p)+d=0  →  dot(n, p+shift) + d - dot(n,shift) = 0)
-    for (auto& p : result.planes)
-        p.d += p.normal[0]*shift[0] + p.normal[1]*shift[1] + p.normal[2]*shift[2];
+    // Update d for every plane by re-measuring from the actual inlier points.
+    // This is numerically exact regardless of how d was estimated before,
+    // and correctly handles all planes (not just the dominant one).
+    for (auto& p : result.planes) {
+        if (p.inliers.empty()) continue;
+        double sum = 0;
+        for (uint32_t idx : p.inliers)
+            sum += p.normal[0]*result.points[idx][0]
+                 + p.normal[1]*result.points[idx][1]
+                 + p.normal[2]*result.points[idx][2];
+        p.d = -(float)(sum / p.inliers.size());
+    }
 
     return result;
 }
