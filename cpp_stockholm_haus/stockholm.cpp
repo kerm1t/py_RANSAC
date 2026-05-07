@@ -10,9 +10,9 @@
 }
 */
 int main() {
-//  auto cloud = pcio::load("d:\\stockholm.pcd");   // or .ply
+  auto cloud = pcio::load("d:\\stockholm.pcd");   // or .ply
 ///  auto cloud = pcio::load(".\\stockholm.ply");   // or .pcd
-  auto cloud = pcio::load(".\\hibollah_building.ply");   // or .pcd
+//  auto cloud = pcio::load(".\\hibollah_building.ply");   // or .pcd
 
    ransac::Config cfg;
     cfg.distance_threshold = 0.004f,//0.05f;
@@ -34,16 +34,27 @@ int main() {
   // result.rotation        — 3×3 column-major SO(3) matrix
   // result.planes          — planes with updated normals and d
   // result.axis_assignment — per-plane: 0=X, 1=Y, 2=Z, -1=unassigned
-  std::vector<std::vector<uint32_t>> facades = {planes[0].inliers, planes[1].inliers};
-//  auto result = ransac::align_to_axes(cloud.points, planes);
+// 5/5/2026
+  std::vector<std::vector<uint32_t>> facades = {planes[0].inliers, planes[1].inliers}; // habe ich nur die wände gewählt
+///  auto result = ransac::align_to_axes(cloud.points, planes);
   auto result = ransac::align_to_axes_and_origin(cloud.points, planes);
+////  std::vector<std::vector<uint32_t>> facades = {result.planes[0].inliers, result.planes[1].inliers}; // habe ich nur die wände gewählt
   pcio::save_colored_ply("aligned.ply", result.points, facades);
+
+    std::printf("\nAdjusted plane(s) to axes:\n");
+    for (int i = 0; i < (int)result.planes.size(); ++i) {
+        auto& p = result.planes[i];
+        std::printf("  [%d] normal=(%.3f,%.3f,%.3f) d=%.3f  inliers=%zu\n",
+                    i, p.normal[0], p.normal[1], p.normal[2],
+                    p.d, p.inliers.size());
+    }
 
 //  std::vector<std::vector<uint32_t>> all = {planes[0].inliers, planes[1].inliers, planes[2].inliers};
 //  pcio::save_colored_ply("result.ply", cloud.points, all);
 
   std::vector<pcio::PlaneDesc> descs;
-  for (auto& p : planes)
+//  for (auto& p : planes)
+  for (auto& p : result.planes)
       descs.push_back({p.normal, p.d, p.inliers});
 
 /// (3)
@@ -81,7 +92,9 @@ int main() {
   // erode > dilate → net shrink (conservative boundary)
   // dilate > erode → net grow  (closing, fills small holes)
 
-  pcio::save_plane_mesh("out.ply", cloud.points, descs, {120,120,120}, 180, gf);
+//5/5/2026
+//pcio::save_plane_mesh("out.ply", cloud.points, descs, {120,120,120}, 180, gf);
+  pcio::save_plane_mesh("out.ply", result.points, descs, {120,120,120}, 180, gf);
 
   // Diagnostic images showing all three stages:
   pcio::GridImageConfig img;
@@ -90,6 +103,7 @@ int main() {
   img.write_diff    = true;   // threshold: green/red
   img.write_morph   = true;   // cyan=kept, yellow=dilated back, red=eroded away
 //  pcio::save_grid_images("debug/plane", cloud.points, descs, img);
-  pcio::save_grid_images("plane", cloud.points, descs, img);
+// 5/5/2026  pcio::save_grid_images("plane", cloud.points, descs, img);
+  pcio::save_grid_images("plane", result.points, descs, img);
 //  printf("%d images written\n", s.n_images);
 }
