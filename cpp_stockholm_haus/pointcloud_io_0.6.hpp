@@ -497,7 +497,7 @@ inline const RGB& plane_color(int plane_idx) {
 inline bool save_colored_ply(
         const std::string& path,
         const std::vector<Point3f>& pts,
-        const std::vector<std::vector<uint32_t>>& planes_inliers,
+        const std::vector<std::vector<uint32_t>>& planes_inliers, // just used for coloring
         RGB outlier_color = {120, 120, 120})
 {
     // Build per-point color lookup
@@ -1165,9 +1165,9 @@ struct MeshStats {
 // support it (stored as a fourth uchar channel).  Most viewers ignore
 // it but it doesn't break loading.
 inline MeshStats
-save_plane_mesh(const std::string&            path,
-                const std::vector<Point3f>&   pts,
-                const std::vector<PlaneDesc>& planes,
+save_plane_mesh(const std::string&            path,   // filename, e.g. out.ply
+                const std::vector<Point3f>&   pts,    // already transformed
+                const std::vector<PlaneDesc>& planes, // already transformed
                 RGB              outlier_color = {120, 120, 120},
                 uint8_t          alpha_pct     = 180,
                 GridFilterConfig grid          = {})
@@ -1245,36 +1245,32 @@ save_plane_mesh(const std::string&            path,
             }
         }
         float inv = 1.f / (float)kept.size();
-        cx *= inv; cy *= inv; cz *= inv;
         // Snap centroid onto the plane: c' = c - dot(n,c+d)*n
-        float dist = pd.normal[0]*cx + pd.normal[1]*cy + pd.normal[2]*cz + pd.d;
-        float pcx = cx - pd.normal[0]*dist;
-        float pcy = cy - pd.normal[1]*dist;
-        float pcz = cz - pd.normal[2]*dist;
+        float dist = pd.normal[0]*cx*inv + pd.normal[1]*cy*inv
+                   + pd.normal[2]*cz*inv + pd.d;
+        float pcx = cx*inv - pd.normal[0]*dist;
+        float pcy = cy*inv - pd.normal[1]*dist;
+        float pcz = cz*inv - pd.normal[2]*dist;
 
         RGB col = plane_color(pi);
 
-        // Centroid vertex (fan pivot) — snapped to plane surface
+        // Centroid vertex (fan pivot)
         uint32_t center_vi = vert_offset + (uint32_t)hull_verts.size();
         hull_verts.push_back({pcx, pcy, pcz, col});
 
-        // Hull ring vertices.
-        // UV coords in pts2d are absolute (dot(p, u/v_axis)).
-        // We lift back using the snapped centroid as the plane origin so the
-        // result is independent of any error in d:
-        //   world = snapped_centroid + (pu - pu_centroid)*u + (pv - pv_centroid)*v
-        float pu_c = detail::dot3({pcx,pcy,pcz}, u);
-        float pv_c = detail::dot3({pcx,pcy,pcz}, v);
-
+        // Hull ring vertices
         uint32_t ring_start = vert_offset + (uint32_t)hull_verts.size();
         for (int hi : hull_idx) {
-            float du = pts2d[hi][0] - pu_c;
-            float dv = pts2d[hi][1] - pv_c;
-            hull_verts.push_back({
-                pcx + du*u[0] + dv*v[0],
-                pcy + du*u[1] + dv*v[1],
-                pcz + du*u[2] + dv*v[2],
-                col});
+            // Lift 2-D hull point back to 3-D, snapped onto plane
+            float pu = pts2d[hi][0], pv_val = pts2d[hi][1];
+            float wx = pu*u[0] + pv_val*v[0];
+            float wy = pu*u[1] + pv_val*v[1];
+            float wz = pu*u[2] + pv_val*v[2];
+            // Plane origin: any point on the plane = -d*n
+            float ox = -pd.d*pd.normal[0];
+            float oy = -pd.d*pd.normal[1];
+            float oz = -pd.d*pd.normal[2];
+            hull_verts.push_back({ox+wx, oy+wy, oz+wz, col});
         }
 
         // Fan triangles: center + consecutive hull edge
