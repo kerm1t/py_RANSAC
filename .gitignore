@@ -1,2 +1,5 @@
 *.exe
 *.obj
+/cpp_stockholm_haus/build/
+/cpp_stockholm_haus/Debug/
+/cpp_stockholm_haus/*.png
