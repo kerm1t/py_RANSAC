@@ -290,18 +290,12 @@ def build_plane_mesh(plane_model, inlier_pts, color,
     if len(hidx) < 3:
         return None, inlier_pts[mask]
 
-    # Snapped centroid — use this as the plane origin for the lift-back
-    # so hull positions are independent of any error in d.
-    centroid_3d = inlier_pts[mask].mean(axis=0)
-    centroid_3d -= normal * (normal @ centroid_3d + d)   # snap to plane
-    pu_c = float(centroid_3d @ u)
-    pv_c = float(centroid_3d @ v)
-
-    hull_3d = np.array([
-        centroid_3d + (pts2d_kept[i, 0] - pu_c) * u
-                    + (pts2d_kept[i, 1] - pv_c) * v
-        for i in hidx])
-    verts  = np.vstack([centroid_3d, hull_3d])
+    origin  = -d * normal
+    hull_3d = np.array([origin + pts2d_kept[i,0]*u + pts2d_kept[i,1]*v
+                        for i in hidx])
+    centroid = hull_3d.mean(axis=0)
+    centroid -= normal * (normal @ centroid + d)
+    verts  = np.vstack([centroid, hull_3d])
     n_ring = len(hull_3d)
     faces  = [[0, 1+i, 1+(i+1)%n_ring] for i in range(n_ring)]
     mesh = o3d.geometry.TriangleMesh()
@@ -493,12 +487,10 @@ def save_grid_images_py(prefix: str,
         hidx    = convex_hull_2d(pts2d)
         if len(hidx) < 3:
             continue
-        # Snapped centroid as plane origin — robust against d errors
-        centroid = inlier_pts.mean(axis=0)
-        centroid = centroid - normal * (normal @ centroid + d)
-        pu_c = float(centroid @ u)
-        pv_c = float(centroid @ v_ax)
-        hull_3d = [centroid + (pts2d[i,0]-pu_c)*u + (pts2d[i,1]-pv_c)*v_ax for i in hidx]
+        origin  = -d * normal
+        hull_3d = [origin + pts2d[i,0]*u + pts2d[i,1]*v_ax for i in hidx]
+        centroid = np.mean(hull_3d, axis=0)
+        centroid -= normal * (normal @ centroid + d)
         col_u = (PLANE_COLORS[pi % len(PLANE_COLORS)] * 255).astype(np.uint8)
 
         center_vi  = v_off + len(hull_verts)
