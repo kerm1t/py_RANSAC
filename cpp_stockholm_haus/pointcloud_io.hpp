@@ -1375,12 +1375,19 @@ save_plane_mesh(const std::string&            path,
 //   pcio::save_offset_planes("offsets.ply", pts, descs, off);
 // ─────────────────────────────────────────────────────────────────────
 
+enum plane_side {
+    POS_SIDE = 1,
+    NEG_SIDE = 2,
+    BOTH_SIDES = 3,
+    NONE = 4
+};
 struct OffsetConfig {
     std::vector<float> distances  = {0.10f}; // offset distances (metres)
     bool   both_sides             = false;    // also write at -distance
     float  pad_uv                 = 0.0f;    // extra UV padding beyond hull AABB
     uint8_t alpha                 = 120;     // face alpha (0–255)
     GridFilterConfig grid         = {};      // same filter applied before AABB
+    std::vector<plane_side> sides = {BOTH_SIDES}; // which sides to write
 };
 
 inline MeshStats
@@ -1442,8 +1449,10 @@ save_offset_planes(const std::string&            path,
             umin=std::min(umin,pu); umax=std::max(umax,pu);
             vmin_=std::min(vmin_,pv); vmax_=std::max(vmax_,pv);
         }
-        umin -= cfg.pad_uv; umax += cfg.pad_uv;
-        vmin_ -= cfg.pad_uv; vmax_ += cfg.pad_uv;
+        umin -= cfg.pad_uv;
+        if (pi==1) umax += cfg.pad_uv;  // nicht für plane 0
+        if (pi==0) vmin_ -= cfg.pad_uv; // nicht für plane 1
+        vmax_ += cfg.pad_uv;
 
         // Four corners in UV space (relative to centroid)
         std::array<std::array<float,2>, 4> corners = {{
@@ -1492,8 +1501,9 @@ save_offset_planes(const std::string&            path,
                 tris.push_back({base+0, base+2, base+3, rcol});
             };
 
-            write_quad(+dist);
-            if (cfg.both_sides) write_quad(-dist);
+            if (cfg.sides[pi] & pcio::POS_SIDE) write_quad(+dist);
+//            if (cfg.both_sides) write_quad(-dist);
+            if (cfg.sides[pi] & pcio::NEG_SIDE) write_quad(-dist);
         }
 
         ++stats.n_planes_written;
