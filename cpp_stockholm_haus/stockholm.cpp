@@ -109,11 +109,14 @@ int main() {
 
   pcio::OffsetConfig off;
 //  off.distances  = {0.05f, 0.10f, 0.20f};  // three shells
-  off.distances  = {0.30f};  // shell
+  off.distances  = {0.10f};  // shell
   off.both_sides = false;                     // ±distance
-  off.pad_uv     = 0.05f;                   // 5cm margin beyond hull bbox
+  off.pad_x     = 0.10f;                   // 5cm margin beyond hull bbox
+  off.pad_y     = 0.00f;                   // 5cm margin beyond hull bbox
+  off.pad_z     = 0.10f;                   // 5cm margin beyond hull bbox
   off.alpha      = 140;                     // face transparency
   off.grid       = gf;                      // reuse same grid filter
+  off.sides   = {pcio::NEG_SIDE, pcio::POS_SIDE, pcio::NONE}; // write ... sides of each plane,here for 3 planes!!
 
   auto s = pcio::save_offset_planes("offsets.ply", result.points, descs, off);
   // s.n_vertices = n_planes × n_distances × (1 or 2 sides) × 4

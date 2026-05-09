@@ -1374,7 +1374,6 @@ save_plane_mesh(const std::string&            path,
 //   off.pad_uv        = 0.05f;            // extra margin beyond hull bbox
 //   pcio::save_offset_planes("offsets.ply", pts, descs, off);
 // ─────────────────────────────────────────────────────────────────────
-
 enum plane_side {
     POS_SIDE = 1,
     NEG_SIDE = 2,
@@ -1384,7 +1383,17 @@ enum plane_side {
 struct OffsetConfig {
     std::vector<float> distances  = {0.10f}; // offset distances (metres)
     bool   both_sides             = false;    // also write at -distance
-    float  pad_uv                 = 0.0f;    // extra UV padding beyond hull AABB
+    // Per-world-axis padding added to the UV bounding box.
+    // Each axis's contribution to U and V padding is weighted by how much
+    // that axis projects onto the plane's U/V directions:
+    //   pad_u = sqrt( (pad_x*ux)^2 + (pad_y*uy)^2 + (pad_z*uz)^2 )
+    // So padding along X has no effect on a plane with normal=(1,0,0),
+    // but full effect on a floor plane (normal=(0,0,1)) whose U/V axes
+    // lie in XY.
+    // Set all three equal to replicate the old `pad_uv` behaviour.
+    float  pad_x                  = 0.0f;
+    float  pad_y                  = 0.0f;
+    float  pad_z                  = 0.0f;
     uint8_t alpha                 = 120;     // face alpha (0–255)
     GridFilterConfig grid         = {};      // same filter applied before AABB
     std::vector<plane_side> sides = {BOTH_SIDES}; // which sides to write
@@ -1449,10 +1458,21 @@ save_offset_planes(const std::string&            path,
             umin=std::min(umin,pu); umax=std::max(umax,pu);
             vmin_=std::min(vmin_,pv); vmax_=std::max(vmax_,pv);
         }
-        umin -= cfg.pad_uv;
-        if (pi==1) umax += cfg.pad_uv;  // nicht für plane 0
-        if (pi==0) vmin_ -= cfg.pad_uv; // nicht für plane 1
-        vmax_ += cfg.pad_uv;
+
+        // Per-axis padding projected onto U and V.
+        // pad_u = sqrt( (pad_x*ux)^2 + (pad_y*uy)^2 + (pad_z*uz)^2 )
+        // This ensures e.g. pad_z=0.1 on a horizontal floor (normal=Z,
+        // U and V lie in XY) contributes zero U/V padding, while
+        // pad_x=0.1 on that same floor contributes 0.1 along U.
+        float pad_u = std::sqrt(cfg.pad_x*cfg.pad_x * u[0]*u[0]
+                               + cfg.pad_y*cfg.pad_y * u[1]*u[1]
+                               + cfg.pad_z*cfg.pad_z * u[2]*u[2]);
+        float pad_v = std::sqrt(cfg.pad_x*cfg.pad_x * v[0]*v[0]
+                               + cfg.pad_y*cfg.pad_y * v[1]*v[1]
+                               + cfg.pad_z*cfg.pad_z * v[2]*v[2]);
+
+        umin -= pad_u; umax += pad_u;
+        vmin_ -= pad_v; vmax_ += pad_v;
 
         // Four corners in UV space (relative to centroid)
         std::array<std::array<float,2>, 4> corners = {{
