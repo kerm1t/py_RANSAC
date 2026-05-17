@@ -446,22 +446,22 @@ struct AlignResult {
 };
 
 // ── align_to_axes ─────────────────────────────────────────────────────
-// Rotates the cloud so that each plane's normal aligns with its nearest
-// cardinal axis (+X/+Y/+Z).
+// Aligns each detected plane's normal to its nearest cardinal axis.
+// Planes are processed in descending inlier-count order so the largest
+// plane drives the primary assignment.  All assigned planes land exactly
+// on their axes simultaneously.
 //
-// Planes are sorted by inlier count (largest first) so the plane with
-// the most evidence drives the primary rotation.  All planes are
-// evaluated in a single pass against the original input normals — no
-// incremental re-rotation between steps — which avoids frame-mismatch
-// bugs when planes are nearly parallel.
+// Method — orthonormal frame construction:
+//   The assigned (source normal → target cardinal axis) pairs define a
+//   rigid rotation.  We build an explicit orthonormal source frame S and
+//   target frame T from the assigned pairs, then R = T * S^T maps every
+//   source column to its target column in one shot — no incremental drift,
+//   no frame-mismatch, every assigned plane exact.
 //
-// For each plane (in inlier-count order) we look for the free axis
-// whose angle to the plane's normal is within `axis_snap_deg` (default
-// 45°).  The largest plane claims its axis first; smaller planes take
-// whatever free axes remain.  The rotation that aligns the *largest
-// assigned plane* is applied to the whole cloud; remaining assigned
-// planes' normals land close to (but not exactly on) their axes — which
-// is correct, since only one rigid rotation can be applied.
+//   Frame construction with k assigned pairs (k = 1, 2, or 3):
+//     k=1: simple rotation_between(n0, axis0)
+//     k≥2: S = [s0 | s1 | s0×s1],  T = [t0 | t1 | t0×t1]
+//          then R = T * S^T = outer-product sum  sum_i (t_i ⊗ s_i)
 inline AlignResult
 align_to_axes(const std::vector<Point3f>& pts,
               const std::vector<Plane>&   planes,
@@ -475,58 +475,83 @@ align_to_axes(const std::vector<Point3f>& pts,
     if (planes.empty()) return result;
 
     const float snap_cos = std::cos(axis_snap_deg * 3.14159265f / 180.f);
+    const Point3f E[3] = { {1,0,0}, {0,1,0}, {0,0,1} };
 
-    // Sort planes by descending inlier count
+    // ── 1. Greedy axis assignment in inlier-count order ───────────────
+    //    All comparisons against original unrotated normals and cardinal axes.
     std::vector<int> order(planes.size());
     std::iota(order.begin(), order.end(), 0);
     std::stable_sort(order.begin(), order.end(), [&](int a, int b){
         return planes[a].inliers.size() > planes[b].inliers.size();
     });
 
-    // Assign axes in inlier-count order, all evaluated against original normals
     std::array<bool,3> used = { false, false, false };
-
     for (int pi : order) {
-        const Point3f& n = planes[pi].normal;
         int   best_ai  = -1;
         float best_cos = snap_cos;
-
         for (int ai = 0; ai < 3; ++ai) {
             if (used[ai]) continue;
-            // axis unit vectors are (1,0,0), (0,1,0), (0,0,1)
-            float c = std::abs(n[ai]); // dot(n, e_ai) = n[ai]
+            float c = std::abs(planes[pi].normal[ai]); // dot(n, E[ai]) = n[ai]
             if (c > best_cos) { best_cos = c; best_ai = ai; }
         }
-
         if (best_ai < 0) continue;
         result.axis_assignment[pi] = best_ai;
         used[best_ai] = true;
     }
 
-    // Build the rotation from the primary plane — the one with the most
-    // inliers that received an assignment.
-    int primary = -1;
+    // ── 2. Collect source/target column pairs (in inlier-count order) ──
+    struct Pair { Point3f s; Point3f t; };
+    std::vector<Pair> pairs;
     for (int pi : order) {
-        if (result.axis_assignment[pi] >= 0) { primary = pi; break; }
+        int ai = result.axis_assignment[pi];
+        if (ai < 0) continue;
+        Point3f t = E[ai];
+        if (planes[pi].normal[ai] < 0) t[ai] = -1.f;  // match sign
+        pairs.push_back({ planes[pi].normal, t });
+        if ((int)pairs.size() == 3) break;
     }
 
-    if (primary >= 0) {
-        int     ai     = result.axis_assignment[primary];
-        Point3f target = {};
-        target[ai]     = 1.f;
-        // Choose +axis or -axis based on which side the normal faces
-        if (detail::dot(planes[primary].normal, target) < 0)
-            target[ai] = -1.f;
+    // ── 3. Build rotation R ────────────────────────────────────────────
+    if (pairs.empty()) {
+        // No assignment — keep identity
+    } else if (pairs.size() == 1) {
+        result.rotation = detail::rotation_between(pairs[0].s, pairs[0].t);
+    } else {
+        // Build orthonormal source frame S = [s0 | s1_orth | s0×s1_orth]
+        // and target frame            T = [t0 | t1_orth | t0×t1_orth]
+        // then R = sum_k (t_k ⊗ s_k^T)  i.e. R * s_k = t_k for each k
+        Point3f s0 = detail::normalize(pairs[0].s);
+        Point3f t0 = detail::normalize(pairs[0].t);
 
-        result.rotation = detail::rotation_between(planes[primary].normal, target);
+        // Orthogonalise s1 against s0
+        auto orth = [&](const Point3f& v, const Point3f& ref) -> Point3f {
+            float p = detail::dot(v, ref);
+            return detail::normalize({v[0]-p*ref[0], v[1]-p*ref[1], v[2]-p*ref[2]});
+        };
+        Point3f s1 = orth(pairs[1].s, s0);
+        Point3f t1 = orth(pairs[1].t, t0);
+        Point3f s2 = detail::normalize(detail::cross(s0, s1));
+        Point3f t2 = detail::normalize(detail::cross(t0, t1));
+
+        // R = T * S^T = sum_k t_k ⊗ s_k  (outer product)
+        // R[row][col] = sum_k t_k[row] * s_k[col]
+        // column-major storage: R[col*3+row]
+        detail::Mat3& R = result.rotation;
+        R = {};
+        const Point3f* S[3] = {&s0, &s1, &s2};
+        const Point3f* T[3] = {&t0, &t1, &t2};
+        for (int k = 0; k < 3; ++k)
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 3; ++col)
+                    R[col*3+row] += (*T[k])[row] * (*S[k])[col];
     }
 
-    // Apply rotation to all points
+    // ── 4. Apply rotation to all points ───────────────────────────────
     result.points.resize(pts.size());
     for (size_t i = 0; i < pts.size(); ++i)
         result.points[i] = detail::mat3_mul_vec(result.rotation, pts[i]);
 
-    // Recompute plane normals and d from rotated inlier points
+    // ── 5. Recompute normals and d from rotated inlier points ──────────
     for (int pi = 0; pi < (int)result.planes.size(); ++pi) {
         auto& p = result.planes[pi];
         p.normal = detail::normalize(
