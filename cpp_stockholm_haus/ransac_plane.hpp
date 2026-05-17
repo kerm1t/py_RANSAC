@@ -315,9 +315,9 @@ fit_planes(const std::vector<Point3f>& pts,
     for (int k = 0; k < max_planes; ++k) {
         if ((int)remaining.size() < 3) break;
 
-        Plane p = fit_plane(remaining, cfg); // fit plane <-- RANSAC
+        Plane p = fit_plane(remaining, cfg);
         if (!p.valid) break;
-        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction) // e.g. less than 5% (0.05) of original points -> dismiss
+        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction)
             break;
 
         // Remap inlier indices to original cloud
@@ -446,9 +446,15 @@ struct AlignResult {
 };
 
 // ── align_to_axes ─────────────────────────────────────────────────────
-// `axis_snap_deg`: a plane normal is assigned to an axis only if the
-//                  angle between them is smaller than this threshold.
-//                  Increase it to be more permissive (default 45°).
+// Assigns each plane's normal to the nearest free cardinal axis.
+// Planes are processed in descending inlier-count order so the largest
+// plane (most evidence) always gets first pick of axes.  After each
+// assignment the rotation is applied to all remaining working normals so
+// subsequent planes are evaluated in the already-partially-aligned frame.
+//
+// `axis_snap_deg`: maximum angle between a plane normal and a candidate
+//                  axis for assignment (default 45°).  Planes outside
+//                  this cone are left unassigned (axis_assignment = -1).
 inline AlignResult
 align_to_axes(const std::vector<Point3f>& pts,
               const std::vector<Plane>&   planes,
@@ -461,50 +467,48 @@ align_to_axes(const std::vector<Point3f>& pts,
 
     const float snap_cos = std::cos(axis_snap_deg * 3.14159265f / 180.f);
 
-    // Cardinal axes — we'll mark one "used" once a plane snaps to it
     std::array<Point3f,3> axes = {{{ 1,0,0 }, { 0,1,0 }, { 0,0,1 }}};
     std::array<bool,   3> used = { false, false, false };
 
-    // Working normals (will be updated as we apply rotations)
+    // Working normals updated in-place as rotations accumulate
     std::vector<Point3f> normals(planes.size());
     for (int i = 0; i < (int)planes.size(); ++i)
         normals[i] = planes[i].normal;
 
-    // Greedy assignment: each iteration pick the (plane, axis) pair with
-    // the smallest angular deviation, rotate to align, mark both used.
-    for (int pass = 0; pass < (int)planes.size(); ++pass) {
-        int   best_pi  = -1, best_ai = -1;
-        float best_cos = snap_cos; // must beat the snap threshold
+    // Process planes in descending inlier-count order so larger planes
+    // always get priority in axis assignment.
+    std::vector<int> order(planes.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b){
+        return planes[a].inliers.size() > planes[b].inliers.size();
+    });
 
-        for (int pi = 0; pi < (int)planes.size(); ++pi) {
-            if (result.axis_assignment[pi] >= 0) continue; // already assigned
-            for (int ai = 0; ai < 3; ++ai) {
-                if (used[ai]) continue;
-                float c = std::abs(detail::dot(normals[pi], axes[ai]));
-                if (c > best_cos) { best_cos=c; best_pi=pi; best_ai=ai; }
-            }
+    for (int pi : order) {
+        // Find the best free axis for this plane (closest normal direction)
+        int   best_ai  = -1;
+        float best_cos = snap_cos; // must exceed threshold
+
+        for (int ai = 0; ai < 3; ++ai) {
+            if (used[ai]) continue;
+            float c = std::abs(detail::dot(normals[pi], axes[ai]));
+            if (c > best_cos) { best_cos = c; best_ai = ai; }
         }
 
-        if (best_pi < 0) break; // nothing close enough — stop
+        if (best_ai < 0) continue; // no free axis within snap threshold
 
-        // Determine sign: align normal to +axis or -axis (whichever is closer)
-        Point3f target_axis = axes[best_ai];
-        if (detail::dot(normals[best_pi], target_axis) < 0)
-            target_axis = {-target_axis[0], -target_axis[1], -target_axis[2]};
+        // Align to +axis or -axis, whichever is closer
+        Point3f target = axes[best_ai];
+        if (detail::dot(normals[pi], target) < 0)
+            target = {-target[0], -target[1], -target[2]};
 
-        // Build rotation that maps normals[best_pi] → target_axis
-        detail::Mat3 R_step = detail::rotation_between(normals[best_pi], target_axis);
+        detail::Mat3 R_step = detail::rotation_between(normals[pi], target);
 
-        // Accumulate into total rotation
+        // Accumulate and apply to all working normals
         result.rotation = detail::mat3_mul(R_step, result.rotation);
-
-        // Update all working normals
         for (auto& n : normals)
             n = detail::mat3_mul_vec(R_step, n);
 
-        // Update axes to track them through accumulated rotation
-        // (not strictly necessary for cardinal axes, but keeps code general)
-        result.axis_assignment[best_pi] = best_ai;
+        result.axis_assignment[pi] = best_ai;
         used[best_ai] = true;
     }
 
@@ -513,23 +517,19 @@ align_to_axes(const std::vector<Point3f>& pts,
     for (size_t i = 0; i < pts.size(); ++i)
         result.points[i] = detail::mat3_mul_vec(result.rotation, pts[i]);
 
-    // Update plane normals and d values in result
+    // Recompute normals and d from rotated inlier points
     for (int pi = 0; pi < (int)result.planes.size(); ++pi) {
-        auto& p   = result.planes[pi];
-        p.normal  = detail::normalize(normals[pi]);
-        // d = -dot(n, any_inlier_point_rotated)
-        // Use the centroid of inlier points for stability
-        if (!p.inliers.empty() && p.inliers[0] < (uint32_t)result.points.size()) {
-            float cx=0,cy=0,cz=0;
-            for (uint32_t idx : p.inliers) {
-                if (idx >= (uint32_t)result.points.size()) continue;
-                cx += result.points[idx][0];
-                cy += result.points[idx][1];
-                cz += result.points[idx][2];
-            }
-            float inv = 1.f / (float)p.inliers.size();
-            p.d = -(p.normal[0]*cx*inv + p.normal[1]*cy*inv + p.normal[2]*cz*inv);
+        auto& p  = result.planes[pi];
+        p.normal = detail::normalize(normals[pi]);
+        if (p.inliers.empty()) continue;
+        double sum = 0;
+        for (uint32_t idx : p.inliers) {
+            if (idx >= (uint32_t)result.points.size()) continue;
+            sum += p.normal[0]*result.points[idx][0]
+                 + p.normal[1]*result.points[idx][1]
+                 + p.normal[2]*result.points[idx][2];
         }
+        p.d = -(float)(sum / p.inliers.size());
     }
 
     return result;
@@ -569,15 +569,6 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
     float inv = 1.f / (float)inliers.size();
     Point3f centroid{ (float)(cx*inv), (float)(cy*inv), (float)(cz*inv) };
 
-    // "selbst geschrieben"
-    // min oder max ist hier nicht so klar, je nachdem, wie das gebäude gedreht ist
-    // Idee: mit Hilfe von Ground die up/down Orientierung ermitteln 
-    float max_y = std::numeric_limits<float>::min();
-    for (uint32_t idx : inliers) {
-        if (idx >= (uint32_t)result.points.size()) continue;
-        max_y = std::max(max_y, result.points[idx][1]);
-    }
-
     // After axis alignment the dominant plane's normal is exactly ±axis,
     // so the centroid already sits on the plane surface.
     // Translate the entire cloud so this centroid moves to the origin.
@@ -585,9 +576,7 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
 
     for (auto& p : result.points) {
         p[0] += shift[0];
-// hack!!        p[1] += shift[1];
-//        p[1] -= shift[1]/6.0f; // shift up so the floor plane (dominant) sits at y=0 instead of z=0
-        p[1] -= max_y; // shift up so the floor plane (dominant) sits at y=0 instead of z=0
+        p[1] += shift[1];
         p[2] += shift[2];
     }
 
