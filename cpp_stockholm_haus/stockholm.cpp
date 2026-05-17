@@ -10,13 +10,19 @@
 }
 */
 int main() {
-  auto cloud = pcio::load("d:\\stockholm.pcd");   // or .ply
+////  auto cloud = pcio::load("d:\\stockholm.pcd");   // or .ply
 ///  auto cloud = pcio::load(".\\stockholm.ply");   // or .pcd
-//  auto cloud = pcio::load(".\\hibollah_building.ply");   // or .pcd
+//  auto cloud = pcio::load("C:\\DATA\\SCaffee_data\\beirut\\hibollah_building.ply");   // or .pcd
+//  auto cloud = pcio::load("C:\\DATA\\SCaffee_data\\beirut_pi3\\pi3_beirut_hisbollah_building.ply");   // or .pcd
+///  auto cloud = pcio::load("C:\\DATA\\SCaffee_data\\beirut_pi3\\pi3_beirut_hisbollah_building_cropped.ply");   // or .pcd
+  auto cloud = pcio::load("C:\\DATA\\SCaffee_data\\beirut_pi3\\pi3_beirut_hisbollah_building_cropped_cars.ply");   // or .pcd
 
    ransac::Config cfg;
-    cfg.distance_threshold = 0.004f,//0.05f;
-    cfg.confidence         = 0.999f;
+// vggt
+//    cfg.distance_threshold = 0.004f,//0.05f;
+// pi3
+    cfg.distance_threshold = 0.02f;
+    cfg.confidence         = 0.5f;//999f;
     cfg.n_threads          = std::thread::hardware_concurrency();
     cfg.refit_with_inliers = true;
 

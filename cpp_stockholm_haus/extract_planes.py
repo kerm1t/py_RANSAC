@@ -7,7 +7,8 @@
 import open3d as o3d
 import numpy as np
 
-pcd = o3d.io.read_point_cloud(r"d:\stockholm.pcd")
+#pcd = o3d.io.read_point_cloud(r"d:\stockholm.pcd")
+pcd = o3d.io.read_point_cloud(r"C:\DATA\SCaffee_data\beirut_pi3\pi3_beirut_hisbollah_building_cropped.ply")
 
 # Optional but recommended
 pcd = pcd.voxel_down_sample(voxel_size=0.02)
