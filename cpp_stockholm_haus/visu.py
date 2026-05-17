@@ -213,6 +213,83 @@ def _rotation_matrix_to_vec(target: np.ndarray) -> np.ndarray:
     return np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)
 
 
+def make_offset_planes(plane_info: list,
+                       distances,
+                       both_sides: bool = False,
+                       pad_uv: float = 0.0,
+                       alpha: float = 0.35) -> list:
+    """
+    Build offset rectangle meshes parallel to each detected plane.
+
+    Parameters
+    ----------
+    plane_info  : list of (plane_model, inlier_pts_np) from segment_planes()
+    distances   : float or list of floats — offset distance(s) in metres
+    both_sides  : if True, generate quads at +dist AND -dist
+    pad_uv      : extra margin (metres) added to the UV bounding box
+    alpha       : display opacity 0–1 (applied as colour darkening since
+                  Open3D TriangleMesh has no per-mesh alpha)
+
+    Returns a list of o3d.geometry.TriangleMesh (one per plane×distance×side).
+    """
+    if isinstance(distances, (int, float)):
+        distances = [float(distances)]
+
+    meshes = []
+    for pi, (plane_model, inlier_pts) in enumerate(plane_info):
+        a, b, c, d = plane_model
+        normal   = np.array([a, b, c]); normal /= np.linalg.norm(normal)
+        u, v_ax  = plane_basis(normal)
+
+        # Snapped centroid
+        centroid = inlier_pts.mean(axis=0)
+        centroid = centroid - normal * (normal @ centroid + d)
+        pu_c = float(centroid @ u)
+        pv_c = float(centroid @ v_ax)
+
+        # UV bounding box of inliers
+        uv   = np.column_stack([inlier_pts @ u, inlier_pts @ v_ax])
+        umin, vmin_ = uv.min(axis=0) - pad_uv
+        umax, vmax_ = uv.max(axis=0) + pad_uv
+
+        # Four corners relative to centroid
+        corners_rel = np.array([
+            [umin - pu_c, vmin_ - pv_c],
+            [umax - pu_c, vmin_ - pv_c],
+            [umax - pu_c, vmax_ - pv_c],
+            [umin - pu_c, vmax_ - pv_c],
+        ])
+
+        col = PLANE_COLORS[pi % len(PLANE_COLORS)]
+
+        for di, dist in enumerate(distances):
+            # Slightly desaturate further shells
+            t     = min(0.25 + 0.15 * di, 0.7)
+            rcol  = col * (1 - t) + np.ones(3) * t
+            rcol  = np.clip(rcol * alpha, 0, 1)
+
+            sides = [+dist]
+            if both_sides:
+                sides.append(-dist)
+
+            for signed_dist in sides:
+                origin = centroid + signed_dist * normal
+                verts_3d = np.array([
+                    origin + du * u + dv * v_ax
+                    for du, dv in corners_rel
+                ])
+                faces = np.array([[0, 1, 2], [0, 2, 3]])
+
+                mesh = o3d.geometry.TriangleMesh()
+                mesh.vertices  = o3d.utility.Vector3dVector(verts_3d)
+                mesh.triangles = o3d.utility.Vector3iVector(faces)
+                mesh.paint_uniform_color(rcol.tolist())
+                mesh.compute_vertex_normals()
+                meshes.append(mesh)
+
+    return meshes
+
+
 def make_normal_arrows(plane_info: list,
                        normal_scale: float = None) -> list:
     """
@@ -554,7 +631,8 @@ def visualize(path, segment, num_planes, threshold, save_mesh,
               cell_size, min_pts_per_cell,
               erode_iters, dilate_iters,
               save_grid_prefix,
-              show_normals, normal_scale):
+              show_normals, normal_scale,
+              offset_distances, offset_both_sides, offset_pad):
     print(f"Loading {path} …")
     has_faces = ply_has_faces(path)
     geometries = []
@@ -614,6 +692,17 @@ def visualize(path, segment, num_planes, threshold, save_mesh,
                 arrows = make_normal_arrows(plane_info, normal_scale)
                 geometries.extend(arrows)
 
+            # Offset rectangles
+            if offset_distances:
+                print(f"\nBuilding offset rectangles at {offset_distances} m …")
+                offset_meshes = make_offset_planes(
+                    plane_info,
+                    distances=offset_distances,
+                    both_sides=offset_both_sides,
+                    pad_uv=offset_pad)
+                geometries.extend(offset_meshes)
+                print(f"  {len(offset_meshes)} offset quad(s) added")
+
             if save_mesh:
                 save_plane_mesh_py(save_mesh, pcd, plane_info)
             if save_grid_prefix:
@@ -670,6 +759,12 @@ def main():
                          "or per-point sticks on a plain cloud)")
     ap.add_argument("--normal-scale",  type=float, default=None, metavar="M",
                     help="Arrow length in metres (default: auto, 20%% of plane diagonal)")
+    ap.add_argument("--offset",        type=float, nargs="+", default=[], metavar="M",
+                    help="Show offset rectangle(s) at these distance(s), e.g. --offset 0.05 0.10")
+    ap.add_argument("--offset-both",   action="store_true",
+                    help="Show offset rectangles on both sides of each plane")
+    ap.add_argument("--offset-pad",    type=float, default=0.0, metavar="M",
+                    help="Extra UV padding on offset rectangles (default: 0)")
     args = ap.parse_args()
     cell = 1e9 if args.no_grid else args.cell_size
     visualize(args.file, args.segment, args.num_planes,
@@ -677,7 +772,8 @@ def main():
               cell, args.min_pts,
               args.erode, args.dilate,
               args.save_grid,
-              args.show_normals, args.normal_scale)
+              args.show_normals, args.normal_scale,
+              args.offset, args.offset_both, args.offset_pad)
 
 if __name__ == "__main__":
     main()
