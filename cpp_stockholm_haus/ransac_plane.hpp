@@ -315,9 +315,9 @@ fit_planes(const std::vector<Point3f>& pts,
     for (int k = 0; k < max_planes; ++k) {
         if ((int)remaining.size() < 3) break;
 
-        Plane p = fit_plane(remaining, cfg);
+        Plane p = fit_plane(remaining, cfg); // fit plane <-- RANSAC
         if (!p.valid) break;
-        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction)
+        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction) // e.g. less than 5% (0.05) of original points -> dismiss
             break;
 
         // Remap inlier indices to original cloud
@@ -605,6 +605,88 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
     }
 
     return result;
+}
+
+// ── rotate_around_axis ────────────────────────────────────────────────
+//
+// Apply one or more 90° rotations around a cardinal axis to an existing
+// AlignResult, in-place.  Useful to correct the residual in-plane
+// orientation after align_to_axes / align_to_axes_and_origin.
+//
+// Parameters
+// ──────────
+// result      : AlignResult from align_to_axes[_and_origin]; modified in place
+// axis        : 0=X, 1=Y, 2=Z
+// steps       : number of 90° steps, positive=CCW, negative=CW when
+//               looking from the positive end of the axis toward origin
+//               (right-hand rule).  Range −3 … +3 covers all distinct
+//               orientations; values outside that range are wrapped.
+//
+// The function:
+//   • builds the exact 90°-step rotation matrix (no floating-point trig)
+//   • multiplies it into result.rotation
+//   • rotates all points
+//   • updates plane normals and d values
+//
+// Example — flip the cloud 180° around Z after aligning:
+//   ransac::rotate_around_axis(aligned, 2, 2);
+//
+// Example — rotate 90° CCW around Y:
+//   ransac::rotate_around_axis(aligned, 1, 1);
+// ─────────────────────────────────────────────────────────────────────
+
+inline void rotate_around_axis(AlignResult& result, int axis, int steps)
+{
+    // Normalise steps to {0,1,2,3}
+    steps = ((steps % 4) + 4) % 4;
+    if (steps == 0) return;
+
+    // Exact 90°-step rotation matrices (column-major, no trig).
+    // Each entry is R_k = (R_90)^k  for k = 1, 2, 3.
+    // R_90 around X:  y→z→-y→-z, x fixed
+    // R_90 around Y:  z→x→-z→-x, y fixed
+    // R_90 around Z:  x→y→-x→-y, z fixed
+    //
+    // Stored as [k=1, k=2, k=3] per axis.
+    // col-major: M[col*3+row]
+    //                          col0          col1          col2
+    static const detail::Mat3 rot_table[3][3] = {
+        // axis=X
+        { { 1, 0, 0,   0, 0, 1,   0,-1, 0 },   // 90°  CCW around X
+          { 1, 0, 0,   0,-1, 0,   0, 0,-1 },   // 180°
+          { 1, 0, 0,   0, 0,-1,   0, 1, 0 } }, // 270° CCW = 90° CW
+        // axis=Y
+        { { 0, 0,-1,   0, 1, 0,   1, 0, 0 },   // 90°  CCW around Y
+          {-1, 0, 0,   0, 1, 0,   0, 0,-1 },   // 180°
+          { 0, 0, 1,   0, 1, 0,  -1, 0, 0 } }, // 270°
+        // axis=Z
+        { { 0, 1, 0,  -1, 0, 0,   0, 0, 1 },   // 90°  CCW around Z
+          {-1, 0, 0,   0,-1, 0,   0, 0, 1 },   // 180°
+          { 0,-1, 0,   1, 0, 0,   0, 0, 1 } }  // 270°
+    };
+
+    if (axis < 0 || axis > 2) return;
+    const detail::Mat3& R_step = rot_table[axis][steps - 1];
+
+    // Accumulate
+    result.rotation = detail::mat3_mul(R_step, result.rotation);
+
+    // Rotate all points
+    for (auto& p : result.points)
+        p = detail::mat3_mul_vec(R_step, p);
+
+    // Update plane normals and recompute d from inlier points
+    for (auto& p : result.planes) {
+        p.normal = detail::mat3_mul_vec(R_step, p.normal);
+        p.normal = detail::normalize(p.normal);
+        if (p.inliers.empty()) continue;
+        double sum = 0;
+        for (uint32_t idx : p.inliers)
+            sum += p.normal[0]*result.points[idx][0]
+                 + p.normal[1]*result.points[idx][1]
+                 + p.normal[2]*result.points[idx][2];
+        p.d = -(float)(sum / p.inliers.size());
+    }
 }
 
 } // namespace ransac

@@ -39,7 +39,11 @@ int main() {
 ///  auto result = ransac::align_to_axes(cloud.points, planes);
   auto result = ransac::align_to_axes_and_origin(cloud.points, planes);
 ////  std::vector<std::vector<uint32_t>> facades = {result.planes[0].inliers, result.planes[1].inliers}; // habe ich nur die wände gewählt
-  pcio::save_colored_ply("aligned.ply", result.points, facades);
+
+// hack for stockholm building:
+ransac::rotate_around_axis(result, 0, -1);  // 90° CW around X
+
+pcio::save_colored_ply("aligned.ply", result.points, facades);
 
     std::printf("\nAdjusted plane(s) to axes:\n");
     for (int i = 0; i < (int)result.planes.size(); ++i) {
@@ -112,8 +116,8 @@ int main() {
   off.distances  = {0.10f};  // shell
   off.both_sides = false;                     // ±distance
   off.pad_x     = 0.10f;                   // 5cm margin beyond hull bbox
-  off.pad_y     = 0.00f;                   // 5cm margin beyond hull bbox
-  off.pad_z     = 0.10f;                   // 5cm margin beyond hull bbox
+  off.pad_y     = 0.10f;                   // 5cm margin beyond hull bbox
+  off.pad_z     = 0.00f;                   // 5cm margin beyond hull bbox
   off.alpha      = 140;                     // face transparency
   off.grid       = gf;                      // reuse same grid filter
   off.sides   = {pcio::NEG_SIDE, pcio::POS_SIDE, pcio::NONE}; // write ... sides of each plane,here for 3 planes!!
