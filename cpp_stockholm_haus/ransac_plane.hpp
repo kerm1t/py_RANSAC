@@ -446,15 +446,22 @@ struct AlignResult {
 };
 
 // ── align_to_axes ─────────────────────────────────────────────────────
-// Assigns each plane's normal to the nearest free cardinal axis.
-// Planes are processed in descending inlier-count order so the largest
-// plane (most evidence) always gets first pick of axes.  After each
-// assignment the rotation is applied to all remaining working normals so
-// subsequent planes are evaluated in the already-partially-aligned frame.
+// Rotates the cloud so that each plane's normal aligns with its nearest
+// cardinal axis (+X/+Y/+Z).
 //
-// `axis_snap_deg`: maximum angle between a plane normal and a candidate
-//                  axis for assignment (default 45°).  Planes outside
-//                  this cone are left unassigned (axis_assignment = -1).
+// Planes are sorted by inlier count (largest first) so the plane with
+// the most evidence drives the primary rotation.  All planes are
+// evaluated in a single pass against the original input normals — no
+// incremental re-rotation between steps — which avoids frame-mismatch
+// bugs when planes are nearly parallel.
+//
+// For each plane (in inlier-count order) we look for the free axis
+// whose angle to the plane's normal is within `axis_snap_deg` (default
+// 45°).  The largest plane claims its axis first; smaller planes take
+// whatever free axes remain.  The rotation that aligns the *largest
+// assigned plane* is applied to the whole cloud; remaining assigned
+// planes' normals land close to (but not exactly on) their axes — which
+// is correct, since only one rigid rotation can be applied.
 inline AlignResult
 align_to_axes(const std::vector<Point3f>& pts,
               const std::vector<Plane>&   planes,
@@ -465,62 +472,65 @@ align_to_axes(const std::vector<Point3f>& pts,
     result.rotation        = detail::mat3_identity();
     result.axis_assignment.assign(planes.size(), -1);
 
+    if (planes.empty()) return result;
+
     const float snap_cos = std::cos(axis_snap_deg * 3.14159265f / 180.f);
 
-    std::array<Point3f,3> axes = {{{ 1,0,0 }, { 0,1,0 }, { 0,0,1 }}};
-    std::array<bool,   3> used = { false, false, false };
-
-    // Working normals updated in-place as rotations accumulate
-    std::vector<Point3f> normals(planes.size());
-    for (int i = 0; i < (int)planes.size(); ++i)
-        normals[i] = planes[i].normal;
-
-    // Process planes in descending inlier-count order so larger planes
-    // always get priority in axis assignment.
+    // Sort planes by descending inlier count
     std::vector<int> order(planes.size());
     std::iota(order.begin(), order.end(), 0);
     std::stable_sort(order.begin(), order.end(), [&](int a, int b){
         return planes[a].inliers.size() > planes[b].inliers.size();
     });
 
+    // Assign axes in inlier-count order, all evaluated against original normals
+    std::array<bool,3> used = { false, false, false };
+
     for (int pi : order) {
-        // Find the best free axis for this plane (closest normal direction)
+        const Point3f& n = planes[pi].normal;
         int   best_ai  = -1;
-        float best_cos = snap_cos; // must exceed threshold
+        float best_cos = snap_cos;
 
         for (int ai = 0; ai < 3; ++ai) {
             if (used[ai]) continue;
-            float c = std::abs(detail::dot(normals[pi], axes[ai]));
+            // axis unit vectors are (1,0,0), (0,1,0), (0,0,1)
+            float c = std::abs(n[ai]); // dot(n, e_ai) = n[ai]
             if (c > best_cos) { best_cos = c; best_ai = ai; }
         }
 
-        if (best_ai < 0) continue; // no free axis within snap threshold
-
-        // Align to +axis or -axis, whichever is closer
-        Point3f target = axes[best_ai];
-        if (detail::dot(normals[pi], target) < 0)
-            target = {-target[0], -target[1], -target[2]};
-
-        detail::Mat3 R_step = detail::rotation_between(normals[pi], target);
-
-        // Accumulate and apply to all working normals
-        result.rotation = detail::mat3_mul(R_step, result.rotation);
-        for (auto& n : normals)
-            n = detail::mat3_mul_vec(R_step, n);
-
+        if (best_ai < 0) continue;
         result.axis_assignment[pi] = best_ai;
         used[best_ai] = true;
     }
 
-    // Apply final rotation to all points
+    // Build the rotation from the primary plane — the one with the most
+    // inliers that received an assignment.
+    int primary = -1;
+    for (int pi : order) {
+        if (result.axis_assignment[pi] >= 0) { primary = pi; break; }
+    }
+
+    if (primary >= 0) {
+        int     ai     = result.axis_assignment[primary];
+        Point3f target = {};
+        target[ai]     = 1.f;
+        // Choose +axis or -axis based on which side the normal faces
+        if (detail::dot(planes[primary].normal, target) < 0)
+            target[ai] = -1.f;
+
+        result.rotation = detail::rotation_between(planes[primary].normal, target);
+    }
+
+    // Apply rotation to all points
     result.points.resize(pts.size());
     for (size_t i = 0; i < pts.size(); ++i)
         result.points[i] = detail::mat3_mul_vec(result.rotation, pts[i]);
 
-    // Recompute normals and d from rotated inlier points
+    // Recompute plane normals and d from rotated inlier points
     for (int pi = 0; pi < (int)result.planes.size(); ++pi) {
-        auto& p  = result.planes[pi];
-        p.normal = detail::normalize(normals[pi]);
+        auto& p = result.planes[pi];
+        p.normal = detail::normalize(
+            detail::mat3_mul_vec(result.rotation, planes[pi].normal));
         if (p.inliers.empty()) continue;
         double sum = 0;
         for (uint32_t idx : p.inliers) {
