@@ -315,9 +315,9 @@ fit_planes(const std::vector<Point3f>& pts,
     for (int k = 0; k < max_planes; ++k) {
         if ((int)remaining.size() < 3) break;
 
-        Plane p = fit_plane(remaining, cfg);
+        Plane p = fit_plane(remaining, cfg); // fit plane <-- RANSAC
         if (!p.valid) break;
-        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction)
+        if ((float)p.inliers.size() / (float)pts.size() < min_inlier_fraction) // e.g. less than 5% (0.05) of original points -> dismiss
             break;
 
         // Remap inlier indices to original cloud
@@ -604,6 +604,15 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
     float inv = 1.f / (float)inliers.size();
     Point3f centroid{ (float)(cx*inv), (float)(cy*inv), (float)(cz*inv) };
 
+    // "selbst geschrieben"
+    // min oder max ist hier nicht so klar, je nachdem, wie das gebäude gedreht ist
+    // Idee: mit Hilfe von Ground die up/down Orientierung ermitteln 
+    float max_y = std::numeric_limits<float>::min();
+    for (uint32_t idx : inliers) {
+        if (idx >= (uint32_t)result.points.size()) continue;
+        max_y = std::max(max_y, result.points[idx][1]);
+    }
+
     // After axis alignment the dominant plane's normal is exactly ±axis,
     // so the centroid already sits on the plane surface.
     // Translate the entire cloud so this centroid moves to the origin.
@@ -611,7 +620,9 @@ align_to_axes_and_origin(const std::vector<Point3f>& pts,
 
     for (auto& p : result.points) {
         p[0] += shift[0];
-        p[1] += shift[1];
+// hack!!        p[1] += shift[1];
+//        p[1] -= shift[1]/6.0f; // shift up so the floor plane (dominant) sits at y=0 instead of z=0
+        p[1] -= max_y; // shift up so the floor plane (dominant) sits at y=0 instead of z=0
         p[2] += shift[2];
     }
 
